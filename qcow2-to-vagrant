@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# Convert an Atomic Host qcow2 to a Vagrant (libvirt) box
+# Convert a classic (yum) or Atomic Host qcow2 to a Vagrant (libvirt) box
 #  - Disable cloud-init
 #  - Set the root password to vagrant, and unlock root
 #  - Add the vagrant user and ssh key
