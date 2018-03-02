@@ -1,0 +1,132 @@
+#!/usr/bin/bash
+# Convert an Atomic Host qcow2 to a Vagrant (libvirt) box
+#  - Disable cloud-init
+#  - Set the root password to vagrant, and unlock root
+#  - Add the vagrant user and ssh key
+
+set -xeuo pipefail
+
+src=$1
+dest=$2
+
+fatal() {
+    echo "error: $@" 1>&2
+    exit 1
+}
+
+tmpd=$(mktemp -d /tmp/qcow2-to-vagrant.XXXXXX)
+tmp_dest=${tmpd}/box.img
+cp --reflink=auto ${src} ${tmp_dest}
+
+# http://libguestfs.org/guestfish.1.html#using-remote-control-robustly-from-shell-scripts
+guestfish[0]="guestfish"
+guestfish[1]="--listen"
+guestfish[3]="-a"
+guestfish[4]="${tmp_dest}"
+
+GUESTFISH_PID=
+eval $("${guestfish[@]}")
+if [ -z "$GUESTFISH_PID" ]; then
+    fatal "guestfish didn't start up, see error messages above"
+fi
+cleanup_guestfish () {
+    guestfish --remote -- exit >/dev/null 2>&1 ||:
+}
+trap cleanup_guestfish EXIT ERR
+
+gf() {
+    guestfish --remote -- "$@"
+}
+
+gf run
+is_atomic=false
+if $(gf list-filesystems |grep -q atomicos); then
+    is_atomic=true
+fi
+if ${is_atomic}; then
+    gf mount /dev/atomicos/root /
+    stateroot=/ostree/deploy/$(gf ls /ostree/deploy)
+    rootdir=${stateroot}/deploy/$(gf ls ${stateroot}/deploy | grep -v \.origin)
+else
+    gf mount /dev/sda1 /
+    rootdir=/
+fi
+# Copy an existing unit file to ensure we get SELinux labeling correct
+unit_dest="${rootdir}/etc/systemd/system/qcow2-to-vagrant.service"
+gf cp-a "${rootdir}/usr/lib/systemd/system/systemd-random-seed.service" "${unit_dest}"
+cat > ${tmpd}/qcow2-to-vagrant.service <<EOF
+[Unit]
+Before=sshd-keygen.service
+Before=sshd.service
+Before=systemd-user-sessions.service
+ConditionPathExists=!/var/lib/qcow2-to-vagrant-init.stamp
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/qcow2-to-vagrant-init
+RemainAfterExit=yes
+EOF
+gf upload ${tmpd}/qcow2-to-vagrant.service "${unit_dest}"
+wanted_link="${rootdir}/etc/systemd/system/multi-user.target.wants/$(basename ${unit_dest})"
+gf ln-s "../$(basename ${unit_dest})" "${wanted_link}"
+# And ensure it has a SELinux label
+gf llz "${rootdir}/etc/systemd/system/multi-user.target.wants"
+gf_relabel() {
+    gf selinux-relabel ${rootdir}/etc/selinux/targeted/contexts/files/file_contexts "$@"
+}
+gf_relabel "${wanted_link}"
+gf llz "${rootdir}/etc/systemd/system/multi-user.target.wants"
+
+# Copy an existing binary to ensure we get SELinux labeling correct
+bin_dest="${rootdir}/usr/libexec/qcow2-to-vagrant-init"
+gf cp-a "${rootdir}/usr/bin/bash" "${bin_dest}"
+cat > ${tmpd}/qcow2-to-vagrant-init << EOF
+#!/usr/bin/bash
+# This is like https://pagure.io/fedora-kickstarts/blob/master/f/fedora-atomic-vagrant.ks
+set -euo pipefail
+echo -n 'vagrant' | passwd -f --stdin root
+passwd -u root
+
+sed -i 's,Defaults\\s*requiretty,Defaults !requiretty,' /etc/sudoers
+
+
+useradd vagrant
+echo -n 'vagrant' | passwd -f --stdin vagrant
+
+echo 'vagrant ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/vagrant-nopasswd
+sed -i 's/.*UseDNS.*/UseDNS no/' /etc/ssh/sshd_config
+mkdir -m 0700 -p ~vagrant/.ssh
+cat > ~vagrant/.ssh/authorized_keys << EOKEYS
+ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA6NF8iallvQVp22WDkTkyrtvp9eWW6A8YVr+kz4TjGYe7gHzIw+niNltGEFHzD8+v1I2YJ6oXevct1YeS0o9HZyN1Q9qgCgzUFtdOKLv6IedplqoPkcmF0aYet2PkEDo3MlTBckFXPITAMzF8dJSIFo9D8HfdOV0IAdx4O7PtixWKn5y2hMNG0zQPyUecp4pzC6kivAIhyfHilFR61RGL+GPXQ2MWZWFYbAGjyiYJnAmCP3NOTd0jMZEnDkbUvxhMmBYSdETk1rRgm+R4LOzFUGaHqHDLKLX+FIPKcF96hrucXzcWyLbIbEgE98OHlnVYCzRdK8jlqm8tehUc9c9WhQ== vagrant insecure public key
+EOKEYS
+chmod 600 ~vagrant/.ssh/authorized_keys
+chown -R vagrant:vagrant ~vagrant/.ssh/
+touch /var/lib/qcow2-to-vagrant-init.stamp
+EOF
+gf upload ${tmpd}/qcow2-to-vagrant-init "${bin_dest}"
+
+# Disable cloud-init
+gf write "${rootdir}/etc/cloud/cloud-init.disabled" ""
+gf_relabel "${rootdir}/etc/cloud/cloud-init.disabled"
+gf glob rm-rf "${rootdir}/etc/systemd/system/multi-user.target.wants/cloud-init*"
+gf glob rm-rf "${rootdir}/etc/systemd/system/multi-user.target.wants/cloud-final.service"
+gf glob rm-rf "${rootdir}/etc/systemd/system/multi-user.target.wants/cloud-config*"
+
+gf umount-all
+guestfish --remote -- exit
+
+cat >${tmpd}/metadata.json <<EOF
+{"provider": "libvirt", "format": "qcow2", "virtual_size": 41}
+EOF
+cat >${tmpd}/Vagrantfile <<EOF
+Vagrant.configure('2') do |config|
+        config.vm.provider :libvirt do |libvirt|
+                libvirt.driver = 'kvm'
+                libvirt.connect_via_ssh = false
+                libvirt.username = 'root'
+                libvirt.storage_pool_name = 'default'
+        end
+end
+EOF
+tar -C ${tmpd} -cvzf ${dest} metadata.json Vagrantfile box.img
+rm ${tmpd} -rf
