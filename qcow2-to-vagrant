@@ -1,4 +1,5 @@
 #!/usr/bin/bash
+# SPDX-License-Identifier: LGPL-2.0-or-later
 # Convert a classic (yum) or Atomic Host qcow2 to a Vagrant (libvirt) box
 #  - Disable cloud-init
 #  - Set the root password to vagrant, and unlock root
