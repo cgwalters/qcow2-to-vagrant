@@ -41,11 +41,12 @@ gf() {
 
 gf run
 is_atomic=false
-if $(gf list-filesystems |grep -q atomicos); then
+vg=$(gf list-filesystems |grep -oEe '/dev/(atomicos|coreos)/root' || true)
+if [[ -n "$vg" ]]; then
     is_atomic=true
 fi
 if ${is_atomic}; then
-    gf mount /dev/atomicos/root /
+    gf mount "${vg}" /
     stateroot=/ostree/deploy/$(gf ls /ostree/deploy)
     rootdir=${stateroot}/deploy/$(gf ls ${stateroot}/deploy | grep -v \.origin)
 else
