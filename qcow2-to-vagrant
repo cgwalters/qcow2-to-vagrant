@@ -85,7 +85,7 @@ cat > ${tmpd}/qcow2-to-vagrant.preset <<EOF
 enable qcow2-to-vagrant.service
 EOF
 gf upload ${tmpd}/qcow2-to-vagrant.preset ${presetdir}/qcow2-to-vagrant.preset
-gf relabel ${presetdir}/qcow2-to-vagrant.preset
+gf_relabel ${presetdir}/qcow2-to-vagrant.preset
 
 # Copy an existing binary to ensure we get SELinux labeling correct
 bin_dest="${rootdir}/usr/libexec/qcow2-to-vagrant-init"
