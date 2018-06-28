@@ -62,11 +62,16 @@ Before=sshd-keygen.service
 Before=sshd.service
 Before=systemd-user-sessions.service
 ConditionPathExists=!/var/lib/qcow2-to-vagrant-init.stamp
+OnFailure=emergency.target
+OnFailureJobMode=replace-irreversibly
 
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/qcow2-to-vagrant-init
 RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
 EOF
 gf upload ${tmpd}/qcow2-to-vagrant.service "${unit_dest}"
 wanted_link="${rootdir}/etc/systemd/system/multi-user.target.wants/$(basename ${unit_dest})"
@@ -81,11 +86,11 @@ gf llz "${rootdir}/etc/systemd/system/multi-user.target.wants"
 # Also write a preset so it works with ConditionFirstBoot=
 presetdir="${rootdir}"/etc/systemd/system-preset
 gf mkdir "${presetdir}" && gf_relabel "${presetdir}"
-cat > ${tmpd}/qcow2-to-vagrant.preset <<EOF
+cat > ${tmpd}/05-qcow2-to-vagrant.preset <<EOF
 enable qcow2-to-vagrant.service
 EOF
-gf upload ${tmpd}/qcow2-to-vagrant.preset ${presetdir}/qcow2-to-vagrant.preset
-gf_relabel ${presetdir}/qcow2-to-vagrant.preset
+gf upload ${tmpd}/05-qcow2-to-vagrant.preset ${presetdir}/05-qcow2-to-vagrant.preset
+gf_relabel ${presetdir}/05-qcow2-to-vagrant.preset
 
 # Copy an existing binary to ensure we get SELinux labeling correct
 bin_dest="${rootdir}/usr/libexec/qcow2-to-vagrant-init"
